@@ -74,7 +74,7 @@
 
       .controls {
         display: grid;
-        grid-template-columns: 1fr auto auto auto;
+        grid-template-columns: minmax(240px, 1fr) 190px auto auto;
         gap: 10px;
         margin-top: 14px;
       }
@@ -135,6 +135,26 @@
         box-shadow: 0 4px 16px #2132470b;
       }
 
+      .category-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin: 8px 0 2px;
+      }
+      .category-tag {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 4px 9px;
+        font-size: 0.74rem;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+        border: 1px solid transparent;
+      }
+      .category-tag.secure { color: #8a2c2c; background: #fff0f0; border-color: #efb6b6; }
+      .category-tag.resilient { color: #645000; background: #fff8d7; border-color: #ead67b; }
+      .category-tag.high-performing { color: #155c8a; background: #eaf6ff; border-color: #a9d5f3; }
+      .category-tag.cost-optimized { color: #116a43; background: #eaf8f0; border-color: #a7dcbc; }
       .qno {
         font-size: 0.82rem;
         color: var(--muted);
@@ -302,6 +322,13 @@
             id="search"
             placeholder="Search questions or AWS services..."
           />
+          <select id="category-filter" aria-label="Filter questions by category">
+            <option value="">All categories</option>
+            <option value="Secure">Secure</option>
+            <option value="Resilient">Resilient</option>
+            <option value="High-Performing">High-Performing</option>
+            <option value="Cost-Optimized">Cost-Optimized</option>
+          </select>
           <label class="page-control" for="page-input">
             Page
             <input id="page-input" type="number" min="1" value="1" />
@@ -21276,8 +21303,58 @@
             },
           },
         ];
+      // AWS SAA study categories. Explicit entries improve known questions;
+      // remaining questions are categorized by weighted Well-Architected keywords.
+      const CATEGORY_OVERRIDES = {
+        "Secure": [3,4,11,13,15,17,26,31,34,35,36,37,42,44,53,56,61,80,85,86,89,91,92,105,106,109,115,119,179],
+        "Resilient": [5,8,14,19,29,40,45,47,48,64,68,69,71,93,101,111,138],
+        "High-Performing": [1,2,7,10,12,20,21,25,33,38,39,41,43,59,63,70,77,130,141,142],
+        "Cost-Optimized": [6,9,22,23,24,30,32,49,66,79,84,88,113,124,126,128,140,146,147,153,160,215,290]
+      };
+      const CATEGORY_KEYWORDS = {
+        "Secure": [
+          "secure", "security", "encrypt", "kms", "iam", "credential", "secret", "certificate",
+          "compliance", "audit", "unauthorized", "private access", "vpc endpoint", "firewall", "waf",
+          "shield", "ddos", "object lock", "mfa", "least privilege", "sensitive", "pii", "phi",
+          "guardduty", "inspector", "cloudtrail", "aws config", "access control", "authentication"
+        ],
+        "Resilient": [
+          "highly available", "high availability", "multi-az", "multiple availability zones", "failover",
+          "disaster recovery", "rpo", "rto", "durable", "resiliency", "resilient", "backup", "restore",
+          "replication", "cross-region", "standby", "fault tolerance", "recover", "availability",
+          "auto scaling group", "decouple", "sqs queue", "active/standby"
+        ],
+        "High-Performing": [
+          "performance", "latency", "throughput", "scale", "scalable", "millisecond", "real-time",
+          "near-real-time", "cloudfront", "global accelerator", "provisioned iops", "read replica",
+          "transfer acceleration", "fast snapshot restore", "kinesis", "cache", "elasticache", "athena",
+          "parallel", "target tracking", "lowest latency", "as quickly as possible"
+        ],
+        "Cost-Optimized": [
+          "cost", "cost-effective", "least cost", "minimize costs", "reduce cost", "savings plan",
+          "reserved instance", "spot instance", "spot instances", "intelligent-tiering", "glacier",
+          "lifecycle", "on-demand capacity mode", "requester pays", "snowball", "least operational overhead",
+          "minimum operational overhead", "operationally efficient"
+        ]
+      };
+      const normalizeCategoryClass = (category) => category.toLowerCase().replace(/[^a-z]+/g, "-").replace(/^-|-$/g, "");
+      function classifyQuestion(q) {
+        for (const [category, ids] of Object.entries(CATEGORY_OVERRIDES)) {
+          if (ids.includes(q.id)) return category;
+        }
+        const text = [q.question, ...(q.choices || []).map((c) => c.text), q.explanation || ""].join(" ").toLowerCase();
+        const scores = Object.fromEntries(Object.entries(CATEGORY_KEYWORDS).map(([category, words]) => [
+          category,
+          words.reduce((score, word) => score + (text.includes(word) ? (word.includes(" ") ? 3 : 1) : 0), 0)
+        ]));
+        const priority = ["Secure", "Resilient", "High-Performing", "Cost-Optimized"];
+        return priority.reduce((best, category) => scores[category] > scores[best] ? category : best, priority[0]);
+      }
+      DATA.forEach((q) => { q.category = q.category || classifyQuestion(q); });
+
       const app = document.getElementById("app"),
         search = document.getElementById("search"),
+        categoryFilter = document.getElementById("category-filter"),
         pageInput = document.getElementById("page-input"),
         pageCount = document.getElementById("page-count"),
         stats = document.getElementById("stats"),
@@ -21332,11 +21409,11 @@
         if (s.revealed) return arraysEqual([...s.selected], q.correctAnswers) ? "correct" : "wrong";
         return s.selected.size ? "selected" : "unanswered";
       }
-      function renderTracker() {
+      function renderTracker(questions = DATA) {
         const counts = { correct: 0, wrong: 0, selected: 0, unanswered: 0 };
-        DATA.forEach((q) => counts[statusOf(q)]++);
+        questions.forEach((q) => counts[statusOf(q)]++);
         trackerSummary.textContent = `${counts.correct} correct · ${counts.wrong} incorrect · ${counts.selected} selected`;
-        trackerGrid.innerHTML = DATA.map((q) => {
+        trackerGrid.innerHTML = questions.map((q) => {
           const status = statusOf(q);
           return `<a class="tracker-item ${status}" href="#q-${q.id}" data-qid="${q.id}" title="Question ${q.id}: ${status}">${q.id}</a>`;
         }).join("");
@@ -21344,7 +21421,12 @@
       function render() {
         saveProgress();
         const term = search.value.trim().toLowerCase();
-        const list = DATA.filter((q) => !term || (q.question + " " + q.choices.map((x) => x.text).join(" ") + " " + q.explanation).toLowerCase().includes(term));
+        const selectedCategory = categoryFilter.value;
+        const list = DATA.filter((q) => {
+          const matchesCategory = !selectedCategory || q.category === selectedCategory;
+          const searchable = (q.question + " " + q.choices.map((x) => x.text).join(" ") + " " + q.explanation + " " + q.category).toLowerCase();
+          return matchesCategory && (!term || searchable.includes(term));
+        });
         const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
         currentPage = Math.min(Math.max(currentPage, 1), totalPages);
         pageInput.value = currentPage;
@@ -21363,9 +21445,9 @@
             return `<label class="${classes}" data-label="${c.label}"><input type="${inputType}" name="q-${q.id}" value="${c.label}" ${selected ? "checked" : ""} ${s.revealed ? "disabled" : ""}><span class="label">${c.label}</span><span>${esc(c.text)}</span></label>`;
           }).join("");
           const answerBody = q.correctAnswers.length ? `<strong>Correct answer: ${q.correctAnswers.join(", ")}</strong><br>${esc(q.explanation)}` : `<div class="warn"><strong>Answer not detected.</strong><br>${esc(q.explanation || "No explanation available.")}</div>`;
-          return `<article class="card" id="q-${q.id}"><div class="qno">Question ${q.id}${q.correctAnswers.length > 1 ? " · Select " + q.correctAnswers.length : ""}</div><div class="question">${esc(q.question)}</div><div class="choices">${choices}</div><div class="actions"><button class="primary reveal" data-id="${q.id}">${s.revealed ? "Answer revealed" : "Reveal answer"}</button><button class="ghost hide" data-id="${q.id}">Hide</button></div><div class="answer ${s.revealed ? "show" : ""}" id="a-${q.id}">${answerBody}</div></article>`;
+          return `<article class="card" id="q-${q.id}"><div class="qno">Question ${q.id}${q.correctAnswers.length > 1 ? " · Select " + q.correctAnswers.length : ""}</div><div class="category-row"><span class="category-tag ${normalizeCategoryClass(q.category)}">${esc(q.category)}</span></div><div class="question">${esc(q.question)}</div><div class="choices">${choices}</div><div class="actions"><button class="primary reveal" data-id="${q.id}">${s.revealed ? "Answer revealed" : "Reveal answer"}</button><button class="ghost hide" data-id="${q.id}">Hide</button></div><div class="answer ${s.revealed ? "show" : ""}" id="a-${q.id}">${answerBody}</div></article>`;
         }).join("") : '<div class="empty">No matching questions.</div>';
-        renderTracker();
+        renderTracker(list);
       }
       app.addEventListener("change", (e) => {
         const input = e.target.closest('.choice input');
@@ -21406,16 +21488,22 @@
         currentPage = 1;
         render();
       });
+      categoryFilter.addEventListener("change", () => {
+        currentPage = 1;
+        render();
+      });
       pageInput.addEventListener("input", () => {
         currentPage = Number(pageInput.value) || 1;
         render();
       });
       document.getElementById("random").addEventListener("click", () => {
         search.value = "";
-        const randomIndex = Math.floor(Math.random() * DATA.length);
-        currentPage = Math.floor(randomIndex / PAGE_SIZE) + 1;
+        const pool = DATA.filter((q) => !categoryFilter.value || q.category === categoryFilter.value);
+        if (!pool.length) return;
+        const q = pool[Math.floor(Math.random() * pool.length)];
+        const questionIndex = pool.findIndex((item) => item.id === q.id);
+        currentPage = Math.floor(questionIndex / PAGE_SIZE) + 1;
         render();
-        const q = DATA[randomIndex];
         const target = document.getElementById("q-" + q.id);
         if (target) target.scrollIntoView({ behavior: "smooth", block: "center" });
       });
